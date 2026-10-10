@@ -1,0 +1,78 @@
+{
+  "app_title": "Dr.D — Live Queue & AI Doctor Platform",
+  "app_type": "hybrid_fullstack responsive web app",
+  "theme": "light with deep Dr.D blue (#1E3A8A) and Dai mint/green (#34D399) accents",
+  "typography": {
+    "heading_font": "Plus Jakarta Sans, sans-serif",
+    "body_font": "Inter, sans-serif",
+    "mono_font": "JetBrains Mono, monospace",
+    "sizes": {
+      "h1": "text-4xl sm:text-5xl lg:text-6xl tracking-tight font-extrabold",
+      "h2": "text-2xl sm:text-3xl lg:text-4xl tracking-tight font-bold",
+      "h3": "text-xl sm:text-2xl font-semibold",
+      "h4": "text-lg sm:text-xl font-medium",
+      "body": "text-base font-normal",
+      "small": "text-sm text-muted-foreground"
+    }
+  },
+  "colors": {
+    "primary": "#1E3A8A",
+    "primary_foreground": "#FFFFFF",
+    "accent": "#34D399",
+    "accent_foreground": "#064E3B",
+    "background": "#F8FAFC",
+    "surface": "#FFFFFF",
+    "border": "#E2E8F0",
+    "text_primary": "#0F172A",
+    "text_secondary": "#64748B"
+  },
+  "visual_enhancers": {
+    "glassmorphism": "backdrop-blur-xl bg-white/80 border border-slate-200 shadow-lg",
+    "card_style": "rounded-2xl border border-slate-200 bg-white shadow-sm p-6",
+    "button_style": "rounded-xl font-medium transition-all duration-200 active:scale-95"
+  },
+  "grids": {
+    "dashboard_grid": "grid grid-cols-1 md:grid-cols-3 lg:grid-cols-4 gap-6",
+    "bento_grid": "grid grid-cols-1 md:grid-cols-8 lg:grid-cols-12 gap-8"
+  },
+  "motion": {
+    "transition_default": "transition-all duration-200 ease-in-out",
+    "hover_lift": "hover:-translate-y-1 hover:shadow-md"
+  },
+  "accessibility": {
+    "aria_support": "full aria attributes and keyboard navigation",
+    "contrast_ratio": "meets WCAG AA standards (>4.5:1 for normal text)"
+  },
+  "image_urls": [
+    {
+      "category": "doctor_profiles",
+      "description": "Professional doctor portrait in white scrub suit",
+      "url": "https://images.unsplash.com/photo-1582750433449-648ed127bb54?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwzfHxkb2N0b3IlMjBtZWRpY2FsJTIwY2xpbmljJTIwcHJvZmVzc2lvbmFsJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzkxNjU3NTQ4fDA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "doctor_profiles_2",
+      "description": "Professional doctor with glasses",
+      "url": "https://images.unsplash.com/photo-1612349317150-e413f6a5b16d?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwxfHxkb2N0b3IlMjBtZWRpY2FsJTIwY2xpbmljJTIwcHJvZmVzc2lvbmFsJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzkxNjU3NTQ4fDA&ixlib=rb-4.1.0&q=85"
+    },
+    {
+      "category": "doctor_profiles_3",
+      "description": "Doctor in lab coat standing",
+      "url": "https://images.unsplash.com/photo-1712215544003-af10130f8eb3?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDk1Nzh8MHwxfHNlYXJjaHwyfHxkb2N0b3IlMjBtZWRpY2FsJTIwY2xpbmljJTIwcHJvZmVzc2lvbmFsJTIwcG9ydHJhaXR8ZW58MHx8fHwxNzkxNjU3NTQ4fDA&ixlib=rb-4.1.0&q=85"
+    }
+  ],
+  "instructions_to_main_agent": [
+    "Build a responsive web application for Dr.D supporting Patients and Doctors.",
+    "Implement patient queue discovery, live position tracking, ETA calculation (doctor-set consult time), symptoms reason, and reschedule/cancel.",
+    "Implement doctor queue dashboard, manual Next / Done / No-show controls, daily queue caps, and Dai patient briefs.",
+    "Implement Dai AI assistant using Gemini 3 Flash for patient logs, logistics triage Q&A (no medical diagnosis).",
+    "Implement browser notifications and in-app live alerts for 15-min warning and 'you're next'.",
+    "Ensure all interactive elements have data-testid attributes.",
+    "Use Dr.D blue (#1E3A8A) and Dai green/mint (#34D399) palette with clean Tailwind CSS and JS."
+  ],
+  "universal_guidelines_for_main_agent": [
+    "Never use full-screen gradients or transparent headers without blur.",
+    "Every interactive element must have hover states and data-testid attributes.",
+    "Avoid generic inter for headings; use Plus Jakarta Sans.",
+    "Ensure all forms use accessible Shadcn components where applicable."
+  ]
+}
