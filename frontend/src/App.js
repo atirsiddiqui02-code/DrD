@@ -8,9 +8,9 @@ const formatError=e=>typeof e?.response?.data?.detail==='string'?e.response.data
 function App(){
  const [user,setUser]=useState(null),[auth,setAuth]=useState(true),[view,setView]=useState("home"),[doctors,setDoctors]=useState([]),[mine,setMine]=useState([]),[selected,setSelected]=useState(null),[reason,setReason]=useState(""),[search,setSearch]=useState(""),[message,setMessage]=useState(""),[daiOpen,setDaiOpen]=useState(false),[toast,setToast]=useState("");
  const load=async()=>{try{const {data}=await api.get('/auth/me');setUser(data); const d=await api.get('/doctors');setDoctors(d.data);const m=await api.get('/appointments/mine');setMine(m.data)}catch{setAuth(false)}};
- useEffect(()=>{load()},[]); useEffect(()=>{if(user?.role==='doctor')setView('doctor')},[user]);
  const active=mine.find(x=>['waiting','called'].includes(x.status));
- const notify=txt=>{setToast(txt);setTimeout(()=>setToast(""),3200)};
+ useEffect(()=>{load()},[]); useEffect(()=>{if(user?.role==='doctor')setView('doctor')},[user]); useEffect(()=>{if(user?.role==='patient'&&active){if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();const socket=new WebSocket(`${API.replace('https','wss')}/ws/queue/${active.doctor_id}`);socket.onmessage=()=>load();return()=>socket.close()}},[user,active?.doctor_id]); useEffect(()=>{if(active&&active.eta_minutes<=15&&'Notification' in window&&Notification.permission==='granted')new Notification(active.status==='called'?"You're next":"Head over soon",{body:`Your queue position is ${active.position}.`})},[active?.eta_minutes,active?.status]);
+ const notify=txt=>{if(txt==='Cancellation is available from your appointment details.'&&active){api.post(`/appointments/${active.id}/cancel`).then(()=>{load();setView('home');setToast('Your appointment was cancelled.')})}else{setToast(txt);setTimeout(()=>setToast(""),3200)}};
  const book=async()=>{try{await api.post('/appointments',{doctor_id:selected.id,reason});setSelected(null);setReason('');await load();setView('queue');notify('Your place is confirmed — we’ll keep you updated.')}catch(e){notify(formatError(e))}};
  const logout=async()=>{await api.post('/auth/logout');setUser(null);setAuth(false)};
  if(!auth)return <Auth onDone={()=>{setAuth(true);load()}}/>;

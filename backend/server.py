@@ -19,7 +19,8 @@ app = FastAPI(title="Dr.D API")
 api = APIRouter(prefix="/api")
 JWT_SECRET = os.environ["JWT_SECRET"]
 ALGORITHM = "HS256"
-connections = set()
+connections = {}
+failed_logins = {}
 logger = logging.getLogger("drd")
 
 def now(): return datetime.now(timezone.utc)
@@ -36,6 +37,7 @@ async def current_user(request: Request):
     except jwt.InvalidTokenError: raise HTTPException(401, "Your session has expired")
     user = await db.users.find_one({"_id": __import__("bson").ObjectId(payload["sub"])})
     if not user: raise HTTPException(401, "User not found")
+    if user.get("role")=="doctor" and not user.get("approved", False): raise HTTPException(403, "Doctor account is awaiting admin approval")
     return user
 
 class Register(BaseModel):
@@ -69,8 +71,15 @@ async def register(data: Register, response: __import__("fastapi").Response):
 
 @api.post("/auth/login")
 async def login(data: Login, response: __import__("fastapi").Response):
-    user=await db.users.find_one({"email":data.email.lower().strip()})
-    if not user or not verify_password(data.password,user["password_hash"]): raise HTTPException(401,"Email or password is incorrect")
+    email=data.email.lower().strip(); attempt=failed_logins.get(email)
+    if attempt and attempt["until"]>now().timestamp(): raise HTTPException(429,"Too many attempts. Please try again in 15 minutes")
+    user=await db.users.find_one({"email":email})
+    if not user or not verify_password(data.password,user["password_hash"]):
+        count=(attempt or {"count":0})["count"]+1
+        failed_logins[email]={"count":count,"until":now().timestamp()+900 if count>=5 else 0}
+        raise HTTPException(401,"Email or password is incorrect")
+    failed_logins.pop(email,None)
+    if user.get("role")=="doctor" and not user.get("approved", False): raise HTTPException(403,"Doctor account is awaiting admin approval")
     response.set_cookie("access_token", token(user), httponly=True, samesite="lax", max_age=604800)
     return public_user(user)
 
@@ -97,10 +106,11 @@ async def queue_snapshot(doctor_id):
 async def broadcast(doctor_id):
     payload=json.dumps({"doctor_id":doctor_id,"queue":await queue_snapshot(doctor_id)})
     dead=[]
-    for ws in connections:
+    for ws, socket_doctor_id in list(connections.items()):
+        if socket_doctor_id != doctor_id: continue
         try: await ws.send_text(payload)
         except Exception: dead.append(ws)
-    for ws in dead: connections.discard(ws)
+    for ws in dead: connections.pop(ws, None)
 
 @api.post("/appointments")
 async def book(data: Booking, user=Depends(current_user)):
@@ -130,6 +140,17 @@ async def cancel_appointment(appointment_id: str, user=Depends(current_user)):
     result=await db.appointments.update_one({"id":appointment_id,"patient_id":str(user["_id"]),"status":{"$in":["waiting","called"]}},{"$set":{"status":"cancelled","cancel_reason":"Cancelled by patient"}})
     if not result.modified_count: raise HTTPException(404,"Appointment is already complete or cancelled")
     return {"ok":True}
+
+@api.post("/appointments/{appointment_id}/reschedule")
+async def reschedule_appointment(appointment_id: str, user=Depends(current_user)):
+    old=await db.appointments.find_one({"id":appointment_id,"patient_id":str(user["_id"]),"status":{"$in":["waiting","called"]}})
+    if not old: raise HTTPException(404,"Appointment is no longer active")
+    doctor=await db.users.find_one({"_id":__import__("bson").ObjectId(old["doctor_id"])})
+    active=await db.appointments.count_documents({"doctor_id":old["doctor_id"],"day":old["day"],"status":{"$in":["waiting","called"]}})
+    await db.appointments.update_one({"id":appointment_id},{"$set":{"status":"cancelled","cancel_reason":"Rescheduled by patient"}})
+    new={**old,"id":str(uuid.uuid4()),"position":active,"status":"waiting","created_at":now().isoformat()}
+    new.pop("_id",None); await db.appointments.insert_one(new); await broadcast(old["doctor_id"])
+    return {"id":new["id"],"position":new["position"],"eta_minutes":max(0,(new["position"]-1)*doctor.get("consult_minutes",15))}
 
 @api.get("/doctors/{doctor_id}/queue")
 async def doctor_queue(doctor_id: str, user=Depends(current_user)):
@@ -182,10 +203,22 @@ async def dai_chat(data: AssistantRequest, user=Depends(current_user)):
 
 @app.websocket("/api/ws/queue/{doctor_id}")
 async def queue_ws(ws: WebSocket, doctor_id: str):
-    await ws.accept(); connections.add(ws)
+    raw=ws.cookies.get("access_token")
+    if not raw:
+        await ws.close(code=1008); return
+    try:
+        payload=jwt.decode(raw,JWT_SECRET,algorithms=[ALGORITHM])
+        socket_user=await db.users.find_one({"_id":__import__("bson").ObjectId(payload["sub"])})
+        if not socket_user or (socket_user.get("role")=="doctor" and (str(socket_user["_id"])!=doctor_id or not socket_user.get("approved",False))):
+            await ws.close(code=1008); return
+        if socket_user.get("role")=="patient" and not await db.appointments.find_one({"doctor_id":doctor_id,"patient_id":str(socket_user["_id"]),"status":{"$in":["waiting","called"]}}):
+            await ws.close(code=1008); return
+    except Exception:
+        await ws.close(code=1008); return
+    await ws.accept(); connections[ws]=doctor_id
     try:
         while True: await ws.receive_text()
-    except WebSocketDisconnect: connections.discard(ws)
+    except WebSocketDisconnect: connections.pop(ws, None)
 
 app.include_router(api)
 app.add_middleware(CORSMiddleware,allow_origins=[os.environ.get("FRONTEND_URL","http://localhost:3000")],allow_credentials=True,allow_methods=["*"],allow_headers=["*"])

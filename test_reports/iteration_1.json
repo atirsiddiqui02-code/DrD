@@ -1,0 +1,31 @@
+{
+  "summary": "Ran public API and UI smoke/e2e coverage for patient and doctor flows. Auth, discovery, booking, Gemini brief, private patient queue data, cancellation API, doctor settings, Dai streaming, and responsive rendering passed.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "/api/auth/register and /api/auth/login", "issue": "Doctor registration sets approved=false but login/current-user still grants access to the doctor dashboard; no invite/admin approval gate is enforced.", "priority": "HIGH"},
+      {"endpoint": "/api/ws/queue/{doctor_id}", "issue": "WebSocket accepts unauthenticated connections and stores every connection globally; broadcast sends each doctor's queue snapshot to all connected sockets, leaking queue data across doctors.", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "/api/appointments", "issue": "No reschedule endpoint is implemented; only booking and cancellation exist."},
+      {"endpoint": "/api/auth/login", "issue": "No brute-force lockout after five failed attempts is implemented."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Patient cancellation/reschedule", "issue": "Queue screen control only displays a toast saying cancellation is available; it does not cancel, reschedule, or open appointment details.", "affected_selectors": ["[data-testid=cancel-appointment-button]"]},
+      {"flow": "Live queue updates and browser alerts", "issue": "Frontend uses five-second polling in doctor dashboard and no WebSocket connection or Notification API; required live updates and 15-minute/next alerts are not wired.", "affected_selectors": ["[data-testid=queue-position]", "[data-testid=notifications-button]"]}
+    ],
+    "design_issues": []
+  },
+  "test_report_links": ["/app/backend/tests/test_review_iteration.py", "/app/test_reports/pytest/pytest_results.xml"],
+  "action_items": ["Enforce doctor approval/invite before login and role dashboard access.", "Authenticate WebSockets and scope connections/broadcasts by doctor_id.", "Implement patient reschedule/cancel UI backed by APIs.", "Wire frontend WebSocket updates and in-app/browser 15-minute and next alerts.", "Add brute-force lockout and auth regression coverage."],
+  "critical_code_review_comments": ["Frontend never connects to the required WebSocket endpoint despite backend exposing one.", "The global connections set makes queue broadcasts cross-tenant; this is a privacy issue."],
+  "updated_files": ["/app/backend/tests/test_review_iteration.py", "/app/test_reports/iteration_1.json"],
+  "success_rate": {"backend": "100% (3/3 executed)", "frontend": "90% (core flows pass; cancellation/alerts fail requirements)"},
+  "seed_data_creation": "Created and cancelled one TEST-style patient booking through the public API/UI; no persistent seed users created.",
+  "retest_needed": true,
+  "should_call_test_agent_after_fix": true,
+  "context_for_next_testing_agent": "Patient and doctor seeded login credentials from /app/memory/test_credentials.md. Existing database has demo patient queue entries from prior smoke tests; retest approval, WebSocket scoping, alerts, and cancellation/reschedule after fixes.",
+  "rca of the issue": "The implementation contains only a polling interval for doctor queues and the patient cancel handler is hard-coded to notify('Cancellation is available...'). Backend has no reschedule route. Doctor approval is stored but not checked by current_user/login. WebSocket connections are global and broadcast ignores doctor_id filtering."
+}
