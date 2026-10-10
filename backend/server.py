@@ -494,7 +494,7 @@ async def reception_dashboard(user=Depends(current_user)):
     columns = []
     for d in doctors:
         doc_id = str(d["_id"])
-        appts = await db.appointments.find({"doctor_id": doc_id, "day": day}, {"_id": 0}).sort("position", 1).to_list(200)
+        appts = await db.appointments.find({"doctor_id": doc_id, "day": day, "status": {"$ne": "cancelled"}}, {"_id": 0}).sort("position", 1).to_list(200)
         rows = []
         for a in appts:
             status = a["status"]

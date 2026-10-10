@@ -9,9 +9,13 @@ export function AuthProvider({ children }) {
 
   const refresh = useCallback(async () => {
     try {
-      const { data } = await api.get("/auth/me");
-      setUser(data);
-      return data;
+      const { data } = await api.get("/auth/me", { validateStatus: (s) => s < 500 });
+      if (data && data.id) {
+        setUser(data);
+        return data;
+      }
+      setUser(null);
+      return null;
     } catch {
       setUser(null);
       return null;

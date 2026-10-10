@@ -1,0 +1,38 @@
+{
+  "summary": "Iteration 2 regression (reception + patient360 + fixes). Backend 23/23 pytest passing including auth, doctor Next (no 500), booking + Dai Gemini brief, duplicate 400, mine ETA, cancel, reschedule, no-show pushback, done+visit, delay, public queue anonymized, reception dashboard/walk-in, patient360 search/profile/summary, Dai SSE, and WebSocket. Frontend 11/11 flows render: login tabs + Google button, patient Home/Book/Queue + Dai bubble, doctor dashboard with Next & settings, reception dashboard with per-doctor columns + walk-in/call-next, patient360 search page. Role-based TopNav links correct per role. Auth guards verified (patient 403 on doctor queue, non-reception 403 on reception dashboard, invalid Google session returns 401 not 500).",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/auth/me", "issue": "Returns 401 when unauthenticated causing noisy console errors during initial render - cosmetic only, not blocking."},
+      {"endpoint": "/api/visits", "issue": "Expects appointment_id as query param (FastAPI treats non-pydantic str as query); likely intended body - works but inconsistent with other POST shapes."},
+      {"endpoint": "/api/reception/dashboard", "issue": "totals.booked never increments because book() creates 'waiting' not 'booked' status; booked column effectively always 0 unless reception uses check-in flow."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "ReceptionDashboard", "issues": ["Many cancelled rows for same patient (Emily Parker) cluttering Dr. Maya column — recommend filtering cancelled from visible rows or collapsing them."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_iteration_2.py", "/app/test_reports/pytest/iter2.xml"],
+  "action_items": [
+    "Consider hiding cancelled rows from reception column view (purely visual).",
+    "Fix reception totals.booked tally — only waiting/called/done appear in rows; 'booked' remains 0 by design but field is misleading.",
+    "Suppress /api/auth/me 401 console noise on login screen (frontend can skip the probe when no cookie)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 809 lines — split into routers (auth, appointments, reception, patient360, dai) for maintainability.",
+    "generate_brief blocks the booking POST on Gemini streaming (can be 5–20s latency); consider firing async and letting client fetch brief separately.",
+    "failed_logins is in-process dict — won't scale beyond single worker and won't persist across restarts.",
+    "WebSocket uses global `connections` dict keyed by ws; fine for small scale but no auth and no rate limiting."
+  ],
+  "updated_files": ["/app/backend/tests/test_iteration_2.py", "/app/test_reports/iteration_2.json"],
+  "success_rate": {"backend": "100% (23/23)", "frontend": "100% (11/11 smoke flows)"},
+  "test_credentials": "From /app/memory/test_credentials.md: patient@drd.demo/Patient123!, doctor@drd.demo/Doctor123!, reception@drd.demo/Reception123!, admin@drd.demo/Admin123!",
+  "seed_data_creation": "Created transient TEST_* bookings and one TEST_WalkIn Guest walk-in patient during tests (visible in Dr. Maya column). Safe to leave.",
+  "retest_needed": false,
+  "should_main_agent_self_test": true,
+  "context_for_next_testing_agent": "All iteration-2 requirements verified. WebSocket connects and streams initial payload. Reception column may have accumulated TEST walk-ins and many cancelled rows for Emily Parker — if column clutter annoys next tests, run db.appointments.delete_many({status:'cancelled'}) or filter in UI. Previously flagged issues from iter_1 (doctor approval gate, scoped WS broadcast, reschedule endpoint, brute-force lockout) are now fixed in server.py.",
+  "rca of the issue": "N/A — all tested features pass."
+}
