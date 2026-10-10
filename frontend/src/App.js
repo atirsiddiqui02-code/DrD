@@ -1,26 +1,103 @@
-import { useEffect, useMemo, useState } from "react";
-import axios from "axios";
-import { Bell, Bot, CalendarDays, Check, ChevronRight, Clock3, HeartPulse, LogOut, Menu, Search, Settings2, Stethoscope, UserRound, X, Zap } from "lucide-react";
-import "@/App.css";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
+import { AuthProvider, useAuth } from "./lib/auth";
+import { Toaster } from "./components/ui/sonner";
+import TopNav from "./components/TopNav";
+import DaiBubble from "./components/DaiBubble";
+import LoginPage from "./pages/LoginPage";
+import AuthCallback from "./pages/AuthCallback";
+import PatientHome from "./pages/PatientHome";
+import PatientBook from "./pages/PatientBook";
+import PatientQueue from "./pages/PatientQueue";
+import DoctorHome from "./pages/DoctorHome";
+import DoctorSettings from "./pages/DoctorSettings";
+import "./App.css";
 
-const API=`${process.env.REACT_APP_BACKEND_URL}/api`; const api=axios.create({baseURL:API,withCredentials:true});
-const formatError=e=>typeof e?.response?.data?.detail==='string'?e.response.data.detail:"Something went wrong. Try again.";
-function App(){
- const [user,setUser]=useState(null),[auth,setAuth]=useState(true),[view,setView]=useState("home"),[doctors,setDoctors]=useState([]),[mine,setMine]=useState([]),[selected,setSelected]=useState(null),[reason,setReason]=useState(""),[search,setSearch]=useState(""),[message,setMessage]=useState(""),[daiOpen,setDaiOpen]=useState(false),[toast,setToast]=useState("");
- const load=async()=>{try{const {data}=await api.get('/auth/me');setUser(data); const d=await api.get('/doctors');setDoctors(d.data);const m=await api.get('/appointments/mine');setMine(m.data)}catch{setAuth(false)}};
- const active=mine.find(x=>['waiting','called'].includes(x.status));
- useEffect(()=>{load()},[]); useEffect(()=>{if(user?.role==='doctor')setView('doctor')},[user]); useEffect(()=>{if(user?.role==='patient'&&active){if('Notification' in window&&Notification.permission==='default')Notification.requestPermission();const socket=new WebSocket(`${API.replace('https','wss')}/ws/queue/${active.doctor_id}`);socket.onmessage=()=>load();return()=>socket.close()}},[user,active?.doctor_id]); useEffect(()=>{if(active&&active.eta_minutes<=15&&'Notification' in window&&Notification.permission==='granted')new Notification(active.status==='called'?"You're next":"Head over soon",{body:`Your queue position is ${active.position}.`})},[active?.eta_minutes,active?.status]);
- const notify=txt=>{if(txt==='Cancellation is available from your appointment details.'&&active){api.post(`/appointments/${active.id}/cancel`).then(()=>{load();setView('home');setToast('Your appointment was cancelled.')})}else{setToast(txt);setTimeout(()=>setToast(""),3200)}};
- const book=async()=>{try{await api.post('/appointments',{doctor_id:selected.id,reason});setSelected(null);setReason('');await load();setView('queue');notify('Your place is confirmed — we’ll keep you updated.')}catch(e){notify(formatError(e))}};
- const logout=async()=>{await api.post('/auth/logout');setUser(null);setAuth(false)};
- if(!auth)return <Auth onDone={()=>{setAuth(true);load()}}/>;
- return <div className="shell"><aside className="sidebar"><div className="brand"><div className="brand-mark">D</div><div><strong>Dr.D</strong><span>care, in real time</span></div></div><div className="role-chip"><span className="online-dot"/> {user?.role==='doctor'?'Doctor workspace':'Patient workspace'}</div><nav>{(user?.role==='patient'?[['home','Find a doctor',Search],['queue','My queue',Clock3]]:[['doctor','Queue dashboard',CalendarDays],['settings','Availability',Settings2]]).map(([id,label,Icon])=><button data-testid={`nav-${id}`} className={view===id?'active':''} onClick={()=>setView(id)} key={id}><Icon size={18}/>{label}</button>)}</nav><div className="sidebar-bottom"><button className="dai-nav" data-testid="open-dai-button" onClick={()=>setDaiOpen(true)}><span className="dai-orb"><Bot size={17}/></span>Ask Dai <Zap size={14}/></button><button className="user-mini" data-testid="profile-button"><span className="avatar">{user?.name?.[0]}</span><span><b>{user?.name}</b><small>{user?.email}</small></span><ChevronRight size={15}/></button><button className="logout" data-testid="logout-button" onClick={logout}><LogOut size={16}/> Sign out</button></div></aside><main className="main"><header className="topbar"><div className="mobile-brand"><div className="brand-mark">D</div><strong>Dr.D</strong></div><div className="topbar-right"><span className="live-pill"><span className="online-dot"/> Live updates on</span><button className="icon-btn" data-testid="notifications-button"><Bell size={18}/><i/></button><span className="avatar small">{user?.name?.[0]}</span></div></header>{view==='home'&&<Home doctors={doctors} search={search} setSearch={setSearch} onSelect={setSelected} active={active} setView={setView}/>} {view==='queue'&&<Queue appointment={active} onRefresh={load} onCancel={()=>notify('Cancellation is available from your appointment details.')} />} {view==='doctor'&&<Doctor user={user} notify={notify}/>} {view==='settings'&&<Settings user={user} notify={notify}/>}</main>{selected&&<Booking doctor={selected} reason={reason} setReason={setReason} onClose={()=>setSelected(null)} onBook={book}/>} {daiOpen&&<Dai onClose={()=>setDaiOpen(false)} message={message} setMessage={setMessage}/>} {toast&&<div className="toast" data-testid="toast-message"><Check size={16}/>{toast}</div>}</div>
+function RequireAuth({ children, role }) {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="drd-loading">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  if (role && user.role !== role) return <Navigate to="/" replace />;
+  return children;
 }
-function Auth({onDone}){const [mode,setMode]=useState('login'),[role,setRole]=useState('patient'),[name,setName]=useState(''),[email,setEmail]=useState('patient@drd.demo'),[password,setPassword]=useState('Patient123!'),[error,setError]=useState('');const submit=async e=>{e.preventDefault();try{await api.post(`/auth/${mode}`,mode==='login'?{email,password}:{name,email,password,role});onDone()}catch(e){setError(formatError(e))}};return <div className="auth-page"><div className="auth-visual"><div className="brand inverse"><div className="brand-mark">D</div><div><strong>Dr.D</strong><span>care, in real time</span></div></div><div className="auth-copy"><span className="eyebrow">THE CALMER WAY TO SEE A DOCTOR</span><h1>Your care,<br/><em>in motion.</em></h1><p>Join a live queue. Know where you stand. Spend less time waiting and more time being heard.</p></div><div className="auth-quote">“The waiting room finally feels like it respects my time.”<small>— Jordan, Dr.D patient</small></div></div><form className="auth-form" onSubmit={submit}><span className="eyebrow">WELCOME TO DR.D</span><h2>{mode==='login'?'Good to see you.':'Start with Dr.D.'}</h2><p className="muted">{mode==='login'?'Sign in to continue your care journey.':'Create a free patient or doctor account.'}</p>{mode==='register'&&<input data-testid="auth-name-input" placeholder="Full name" value={name} onChange={e=>setName(e.target.value)} required/>}<input data-testid="auth-email-input" placeholder="Email address" type="email" value={email} onChange={e=>setEmail(e.target.value)} required/><input data-testid="auth-password-input" placeholder="Password" type="password" value={password} onChange={e=>setPassword(e.target.value)} required/>{mode==='register'&&<div className="segmented"><button type="button" className={role==='patient'?'selected':''} onClick={()=>setRole('patient')}>Patient</button><button type="button" className={role==='doctor'?'selected':''} onClick={()=>setRole('doctor')}>Doctor</button></div>}{error&&<div className="error">{error}</div>}<button className="primary full" data-testid="auth-submit-button">{mode==='login'?'Sign in':'Create account'}<ChevronRight size={17}/></button><button type="button" className="text-button" data-testid="auth-mode-toggle" onClick={()=>setMode(mode==='login'?'register':'login')}>{mode==='login'?"I’m new here — create an account":"I already have an account"}</button><p className="demo-note">Demo patient: patient@drd.demo / Patient123!<br/>Demo doctor: doctor@drd.demo / Doctor123!</p></form></div>}
-function Home({doctors,search,setSearch,onSelect,active,setView}){const filtered=doctors.filter(d=>(d.name+d.specialty).toLowerCase().includes(search.toLowerCase()));return <div className="content"><div className="welcome"><div><span className="eyebrow">{active?'YOUR CARE, IN MOTION':'GOOD MORNING'}</span><h1>{active?'You’re already in the flow.':'Find care that moves with you.'}</h1><p>{active?'Your live queue is ready whenever you are.':'Browse trusted doctors and join their queue when it works for you.'}</p></div>{active&&<button className="queue-banner" data-testid="home-active-queue" onClick={()=>setView('queue')}><span className="queue-number">{active.position}</span><span><small>Your queue position</small><b>~{active.eta_minutes} min away</b></span><ChevronRight/></button>}</div><div className="search-row"><div className="search-box"><Search size={19}/><input data-testid="doctor-search-input" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search by doctor or specialty"/></div><button className="filter-btn" data-testid="availability-filter"><span className="online-dot"/> Open today</button></div><div className="section-head"><div><span className="eyebrow">AVAILABLE TODAY</span><h2>Doctors near your pace</h2></div><span className="result-count">{filtered.length} doctors</span></div><div className="doctor-grid">{filtered.map((d,i)=><article className="doctor-card" key={d.id} data-testid={`doctor-card-${d.id}`}><div className="doctor-top"><div className={`doctor-photo photo-${i%3}`}><UserRound size={28}/></div><span className={d.is_open?'open-tag':'closed-tag'}>{d.is_open?'Queue open':'Closed'}</span></div><h3>{d.name}</h3><p className="specialty">{d.specialty}</p><div className="doctor-meta"><span><Clock3 size={14}/> {d.consult_minutes} min consults</span><span><UserRound size={14}/> {d.queue_count} in queue</span></div><button className="secondary full" data-testid={`book-doctor-${d.id}`} disabled={!d.is_open} onClick={()=>onSelect(d)}>{d.is_open?'Join queue':'See availability'}<ChevronRight size={16}/></button></article>)}</div></div>}
-function Booking({doctor,reason,setReason,onClose,onBook}){return <div className="modal-backdrop"><div className="modal" data-testid="booking-modal"><button className="close-btn" data-testid="close-booking-button" onClick={onClose}><X/></button><span className="eyebrow">JOINING TODAY’S QUEUE</span><h2>Book with {doctor.name}</h2><p className="muted">You’ll receive a live position and ETA. No fixed appointment time — just a calmer way to wait.</p><div className="booking-info"><div><Clock3 size={18}/><span><b>~{doctor.consult_minutes} min</b><small>average consult</small></span></div><div><UserRound size={18}/><span><b>{doctor.queue_count+1}th</b><small>your position today</small></span></div></div><label>What brings you in today?<textarea data-testid="booking-reason-input" value={reason} onChange={e=>setReason(e.target.value)} placeholder="A few words helps Dai prepare your doctor…" required/></label><button className="primary full" data-testid="confirm-booking-button" onClick={onBook}>Confirm free booking <ChevronRight size={17}/></button><small className="privacy"><Check size={13}/> Your note is private to you and your doctor</small></div></div>}
-function Queue({appointment,onRefresh,onCancel}){if(!appointment)return <div className="empty-state"><div className="empty-icon"><Clock3/></div><h2>No active queue yet</h2><p>Find a doctor and join a queue when you’re ready.</p></div>;return <div className="content queue-page"><div className="page-title"><div><span className="eyebrow">LIVE QUEUE · TODAY</span><h1>Your care, in motion.</h1><p>Updates arrive automatically as the queue moves.</p></div><button className="icon-btn bordered" data-testid="refresh-queue-button" onClick={onRefresh}><Zap size={17}/></button></div><section className="queue-hero"><div className="queue-hero-top"><span className="live-label"><span className="pulse"/> LIVE NOW</span><span className="queue-doctor">{appointment.doctor_name}</span></div><div className="queue-main"><div><small>YOUR POSITION</small><strong data-testid="queue-position">{appointment.position}</strong><span>in the queue</span></div><div className="eta-line"><Clock3/><div><small>ESTIMATED WAIT</small><b data-testid="queue-eta">~{appointment.eta_minutes} min</b><span>based on live movement</span></div></div></div><div className="queue-progress"><span style={{width:`${Math.max(8,100-(appointment.position*8))}%`}}/></div><p className="queue-reassure"><Check size={17}/> You’ll get a browser alert when it’s time to head in.</p></section><div className="queue-columns"><section className="info-panel"><div className="panel-head"><h3>What happens next</h3><span className="mini-status">{appointment.status==='called'?'You’re next':'You’re in line'}</span></div><div className="timeline"><div className="timeline-item done"><span><Check/></span><div><b>Booking confirmed</b><small>Your note is with the doctor</small></div></div><div className="timeline-item current"><span><Clock3/></span><div><b>Wait comfortably</b><small>We’ll nudge you 15 min before</small></div></div><div className="timeline-item"><span>3</span><div><b>See your doctor</b><small>Come in when you’re called</small></div></div></div></section><section className="info-panel dai-card"><div className="dai-heading"><span className="dai-orb"><Bot size={18}/></span><div><h3>Dai is watching the line</h3><small>Your care companion</small></div></div><p>“I’ll keep an eye on your position so you don’t have to.”</p><button className="text-button mint" data-testid="queue-ask-dai-button">Ask Dai a question <ChevronRight size={15}/></button></section></div><button className="cancel-link" data-testid="cancel-appointment-button" onClick={onCancel}>Need to reschedule or cancel?</button></div>}
-function Doctor({user,notify}){const [queue,setQueue]=useState([]),[selected,setSelected]=useState(null);const load=()=>api.get(`/doctors/${user.id}/queue`).then(r=>setQueue(r.data));useEffect(()=>{load();const t=setInterval(load,5000);return()=>clearInterval(t)},[]);const act=async(type,id)=>{try{await api.post(`/doctors/${user.id}/${type}`,{appointment_id:id});await load();notify(type==='next'?'Patient called in.':'Patient moved to the back of the queue.')}catch(e){notify(formatError(e))}};return <div className="content"><div className="doctor-dashboard-head"><div><span className="eyebrow">DOCTOR WORKSPACE · LIVE</span><h1>Your queue, at a glance.</h1><p>Tap Next when you’re ready. Nothing moves without you.</p></div><div className="doctor-stat"><strong>{queue.length}</strong><span>patients today</span></div></div><div className="doctor-grid-layout"><section className="queue-list"><div className="panel-head"><h3>Today’s patients</h3><span className="live-label"><span className="pulse"/> live</span></div>{queue.length===0?<div className="empty-small">Your queue is clear. Enjoy the breathing room.</div>:queue.map((p,i)=><div className={`patient-row ${p.status==='called'?'called':''}`} key={p.id} data-testid={`patient-row-${p.id}`}><div className="patient-index">{String(i+1).padStart(2,'0')}</div><div className="patient-info"><b>{p.patient_name}</b><span>{p.status==='called'?'In consultation':`${p.position} in line · ${p.pushbacks||0}/2 no-shows`}</span></div><button className="brief-btn" data-testid={`brief-${p.id}`} onClick={()=>setSelected(p)}><Bot size={15}/> Dai brief</button>{i===0&&p.status==='waiting'&&<button className="primary small" data-testid={`next-${p.id}`} onClick={()=>act('next',p.id)}>Next <ChevronRight size={15}/></button>}{p.status==='called'&&<button className="done-btn" data-testid={`no-show-${p.id}`} onClick={()=>act('no-show',p.id)}>No-show</button>}</div>)}</section><section className="doctor-side-panel"><div className="dai-heading"><span className="dai-orb"><Bot size={18}/></span><div><h3>Dai for doctors</h3><small>Briefs, before the door opens</small></div></div><p>Patient notes become a clear, focused starting point — without losing the human detail.</p><div className="brief-example"><span className="eyebrow">NEXT UP</span><b>{queue[0]?.patient_name||'Your next patient'}</b><small>{queue[0]?'Reason ready to review':'The brief will appear here'}</small></div></section></div>{selected&&<div className="brief-overlay" onClick={()=>setSelected(null)}><div className="brief-modal" onClick={e=>e.stopPropagation()}><button className="close-btn" onClick={()=>setSelected(null)}><X/></button><span className="eyebrow">DAI PATIENT BRIEF</span><h2>{selected.patient_name}</h2><div className="brief-body"><p><b>Reason for visit</b>{selected.reason}</p><p><b>Structured summary</b>{selected.brief||'Dai is preparing a concise summary for this patient.'}</p></div><button className="primary full" onClick={()=>setSelected(null)}>Got it</button></div></div>}</div>}
-function Settings({user,notify}){const [open,setOpen]=useState(true),[minutes,setMinutes]=useState(15),[cap,setCap]=useState(20);const save=async()=>{await api.patch(`/doctors/${user.id}/settings`,{is_open:open,consult_minutes:Number(minutes),daily_cap:Number(cap)});notify('Availability saved.')};return <div className="content narrow"><span className="eyebrow">DOCTOR SETTINGS</span><h1>Set your pace.</h1><p className="intro">Your average consult time shapes every patient’s ETA. Keep it honest and the queue stays kind.</p><section className="settings-panel"><div className="setting-row"><div><h3>Today’s queue</h3><p>Patients can join while this is open.</p></div><button className={`toggle ${open?'on':''}`} data-testid="queue-open-toggle" onClick={()=>setOpen(!open)}><span/></button></div><div className="setting-row"><div><h3>Average consult time</h3><p>Used to estimate each patient’s wait.</p></div><div className="number-input"><input data-testid="consult-time-input" type="number" value={minutes} onChange={e=>setMinutes(e.target.value)}/><span>min</span></div></div><div className="setting-row"><div><h3>Daily queue cap</h3><p>A soft boundary for today’s bookings.</p></div><div className="number-input"><input data-testid="daily-cap-input" type="number" value={cap} onChange={e=>setCap(e.target.value)}/><span>people</span></div></div><button className="primary" data-testid="save-settings-button" onClick={save}>Save availability <Check size={16}/></button></section></div>}
-function Dai({onClose,message,setMessage}){const [items,setItems]=useState([]),send=async()=>{if(!message.trim())return;const text=message;setMessage('');setItems(x=>[...x,{from:'user',text}]);const r=await fetch(`${API}/dai/chat`,{method:'POST',headers:{'Content-Type':'application/json'},credentials:'include',body:JSON.stringify({message:text})});const reader=r.body.getReader(),decoder=new TextDecoder();let answer='';setItems(x=>[...x,{from:'dai',text:''}]);while(true){const {done,value}=await reader.read();if(done)break;for(const line of decoder.decode(value).split('\n'))if(line.startsWith('data:')){const d=JSON.parse(line.slice(5));answer+=d.text;setItems(x=>{const a=[...x];a[a.length-1]={from:'dai',text:answer};return a})}}};return <div className="dai-drawer"><div className="drawer-head"><div className="dai-heading"><span className="dai-orb"><Bot size={18}/></span><div><h3>Ask Dai</h3><small>Your Dr.D care companion</small></div></div><button className="close-btn" onClick={onClose}><X/></button></div><div className="drawer-body"><div className="dai-welcome"><span className="dai-orb large"><Bot size={25}/></span><h3>How can I help today?</h3><p>Queue updates, rescheduling, and finding the right specialty — nothing medical.</p></div>{items.map((x,i)=><div className={`chat-bubble ${x.from}`} key={i}>{x.text}</div>)}</div><div className="drawer-input"><input data-testid="dai-message-input" value={message} onChange={e=>setMessage(e.target.value)} onKeyDown={e=>e.key==='Enter'&&send()} placeholder="Ask about your appointment…"/><button data-testid="dai-send-button" onClick={send}><ChevronRight/></button></div></div>}
-export default App;
+
+function HomeRouter() {
+  const { user, loading } = useAuth();
+  if (loading) return <div className="drd-loading">Loading…</div>;
+  if (!user) return <Navigate to="/login" replace />;
+  return user.role === "doctor" ? <DoctorHome /> : <PatientHome />;
+}
+
+function AppRoutes() {
+  const location = useLocation();
+  const { user } = useAuth();
+
+  // Google OAuth callback: detect synchronously
+  if (location.hash?.includes("session_id=")) {
+    return <AuthCallback />;
+  }
+
+  return (
+    <div className="drd-shell">
+      <TopNav />
+      <main className="drd-main">
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/" element={<HomeRouter />} />
+          <Route
+            path="/book"
+            element={
+              <RequireAuth role="patient">
+                <PatientBook />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/book/:doctorId"
+            element={
+              <RequireAuth role="patient">
+                <PatientBook />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/queue"
+            element={
+              <RequireAuth role="patient">
+                <PatientQueue />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/doctor"
+            element={
+              <RequireAuth role="doctor">
+                <DoctorHome />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/doctor/settings"
+            element={
+              <RequireAuth role="doctor">
+                <DoctorSettings />
+              </RequireAuth>
+            }
+          />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </main>
+      {user && <DaiBubble />}
+      <Toaster />
+    </div>
+  );
+}
+
+export default function App() {
+  return (
+    <BrowserRouter>
+      <AuthProvider>
+        <AppRoutes />
+      </AuthProvider>
+    </BrowserRouter>
+  );
+}
