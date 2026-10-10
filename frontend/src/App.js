@@ -10,13 +10,16 @@ import PatientBook from "./pages/PatientBook";
 import PatientQueue from "./pages/PatientQueue";
 import DoctorHome from "./pages/DoctorHome";
 import DoctorSettings from "./pages/DoctorSettings";
+import ReceptionDashboard from "./pages/ReceptionDashboard";
+import Patient360 from "./pages/Patient360";
 import "./App.css";
 
-function RequireAuth({ children, role }) {
+function RequireAuth({ children, role, roles }) {
   const { user, loading } = useAuth();
   if (loading) return <div className="drd-loading">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
   if (role && user.role !== role) return <Navigate to="/" replace />;
+  if (roles && !roles.includes(user.role)) return <Navigate to="/" replace />;
   return children;
 }
 
@@ -24,7 +27,9 @@ function HomeRouter() {
   const { user, loading } = useAuth();
   if (loading) return <div className="drd-loading">Loading…</div>;
   if (!user) return <Navigate to="/login" replace />;
-  return user.role === "doctor" ? <DoctorHome /> : <PatientHome />;
+  if (user.role === "doctor") return <DoctorHome />;
+  if (user.role === "reception" || user.role === "admin") return <Navigate to="/reception" replace />;
+  return <PatientHome />;
 }
 
 function AppRoutes() {
@@ -80,6 +85,30 @@ function AppRoutes() {
             element={
               <RequireAuth role="doctor">
                 <DoctorSettings />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/reception"
+            element={
+              <RequireAuth roles={["reception", "admin"]}>
+                <ReceptionDashboard />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/patient360"
+            element={
+              <RequireAuth roles={["doctor", "reception", "admin"]}>
+                <Patient360 />
+              </RequireAuth>
+            }
+          />
+          <Route
+            path="/patient360/:patientId"
+            element={
+              <RequireAuth roles={["doctor", "reception", "admin"]}>
+                <Patient360 />
               </RequireAuth>
             }
           />

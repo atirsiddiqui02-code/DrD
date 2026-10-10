@@ -8,13 +8,20 @@ const NAV = [
   { to: "/queue", label: "Patient · Queue", role: "patient" },
   { to: "/doctor", label: "Doctor · Home", role: "doctor" },
   { to: "/doctor/settings", label: "Doctor · Settings", role: "doctor" },
+  { to: "/reception", label: "Reception · Today", roles: ["reception", "admin"] },
+  { to: "/patient360", label: "Patient 360", roles: ["doctor", "reception", "admin"] },
 ];
 
 export default function TopNav() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const nav = useNavigate();
-  const items = NAV.filter((n) => !n.role || n.role === user?.role);
+  const items = NAV.filter((n) => {
+    if (!n.role && !n.roles) return true;
+    if (n.role) return n.role === user?.role;
+    if (n.roles) return user && n.roles.includes(user.role);
+    return false;
+  });
 
   return (
     <header className="drd-topnav">

@@ -81,6 +81,10 @@ async def current_user(request: Request):
 # ----- Models -----
 class Register(BaseModel):
     name: str; email: str; password: str; role: str = "patient"; specialty: Optional[str] = None
+class WalkIn(BaseModel):
+    doctor_id: str; patient_name: str; phone: Optional[str] = ""; reason: str
+class Visit(BaseModel):
+    condition: str; medications: Optional[list] = []; notes: Optional[str] = ""
 class Login(BaseModel): email: str; password: str
 class Booking(BaseModel): doctor_id: str; reason: str
 class DoctorSettings(BaseModel): is_open: bool; consult_minutes: int = Field(15, ge=5, le=120); daily_cap: Optional[int] = Field(None, ge=1)
@@ -113,7 +117,7 @@ async def register(data: Register, response: Response):
     email = data.email.lower().strip()
     if await db.users.find_one({"email": email}):
         raise HTTPException(409, "An account with that email already exists")
-    role = data.role if data.role in ("patient", "doctor") else "patient"
+    role = data.role if data.role in ("patient", "doctor", "reception") else "patient"
     user = {
         "name": data.name, "email": email,
         "password_hash": hash_password(data.password), "role": role,
@@ -459,8 +463,188 @@ async def mark_done(doctor_id: str, data: QueueAction, user=Depends(current_user
             {"doctor_id": doctor_id, "day": appt["day"], "status": {"$in": ["waiting", "called"]}, "position": {"$gt": appt["position"]}},
             {"$inc": {"position": -1}},
         )
+    # Create visit history record
+    await db.visits.insert_one({
+        "id": str(uuid.uuid4()),
+        "appointment_id": appt["id"],
+        "patient_id": appt["patient_id"],
+        "patient_name": appt["patient_name"],
+        "doctor_id": doctor_id,
+        "doctor_name": user.get("name"),
+        "condition": appt.get("reason", "Consultation"),
+        "brief": appt.get("brief"),
+        "medications": [],
+        "notes": "",
+        "date": now().isoformat(),
+    })
     await broadcast(doctor_id)
     return {"ok": True}
+
+# ----- Reception -----
+async def require_reception(user):
+    if user["role"] not in ("reception", "admin"):
+        raise HTTPException(403, "Reception access only")
+
+@api.get("/reception/dashboard")
+async def reception_dashboard(user=Depends(current_user)):
+    await require_reception(user)
+    day = today()
+    doctors = await db.users.find({"role": "doctor", "approved": True}, {"password_hash": 0}).to_list(100)
+    totals = {"booked": 0, "checked_in": 0, "in_consult": 0, "completed": 0}
+    columns = []
+    for d in doctors:
+        doc_id = str(d["_id"])
+        appts = await db.appointments.find({"doctor_id": doc_id, "day": day}, {"_id": 0}).sort("position", 1).to_list(200)
+        rows = []
+        for a in appts:
+            status = a["status"]
+            if status == "booked": totals["booked"] += 1
+            elif status == "waiting": totals["checked_in"] += 1
+            elif status == "called": totals["in_consult"] += 1
+            elif status == "done": totals["completed"] += 1
+            rows.append({
+                "id": a["id"], "position": a["position"], "patient_id": a["patient_id"],
+                "patient_name": a["patient_name"], "reason": a.get("reason", ""),
+                "status": status, "pushbacks": a.get("pushbacks", 0),
+            })
+        columns.append({
+            "doctor_id": doc_id, "name": d["name"],
+            "specialty": d.get("specialty"),
+            "delay_minutes": d.get("delay_minutes", 0),
+            "is_open": d.get("is_open", False),
+            "consult_minutes": d.get("consult_minutes", 15),
+            "rows": rows,
+        })
+    return {"date": day, "totals": totals, "doctors": columns}
+
+@api.post("/reception/walk-in")
+async def reception_walk_in(data: WalkIn, user=Depends(current_user)):
+    await require_reception(user)
+    doctor = await db.users.find_one({"_id": ObjectId(data.doctor_id), "role": "doctor", "approved": True})
+    if not doctor or not doctor.get("is_open"):
+        raise HTTPException(400, "This doctor's queue is not open")
+    day = today()
+    active = await db.appointments.count_documents({"doctor_id": data.doctor_id, "day": day, "status": {"$in": ["waiting", "called", "booked"]}})
+    if doctor.get("daily_cap") and active >= doctor["daily_cap"]:
+        raise HTTPException(400, "Today's queue is full")
+    phone = (data.phone or "").strip()
+    patient = None
+    if phone:
+        patient = await db.users.find_one({"phone": phone, "role": "patient"})
+    if not patient:
+        patient = {
+            "name": data.patient_name, "email": f"walkin+{uuid.uuid4().hex[:8]}@drd.local",
+            "password_hash": None, "role": "patient", "approved": True,
+            "phone": phone, "walk_in": True, "created_at": now().isoformat(),
+        }
+        r = await db.users.insert_one(patient); patient["_id"] = r.inserted_id
+    position = active + 1
+    brief_text = ""
+    try: brief_text = await generate_brief(data.reason)
+    except Exception as exc: logger.warning("Dai brief unavailable: %s", exc)
+    appt = {
+        "id": str(uuid.uuid4()), "doctor_id": data.doctor_id,
+        "doctor_name": doctor["name"],
+        "patient_id": str(patient["_id"]), "patient_name": patient["name"],
+        "reason": data.reason, "brief": brief_text, "position": position,
+        "status": "waiting", "day": day, "pushbacks": 0,
+        "created_at": now().isoformat(), "walk_in": True,
+    }
+    await db.appointments.insert_one(appt)
+    await broadcast(data.doctor_id)
+    return {k: v for k, v in appt.items() if k != "_id"}
+
+@api.post("/reception/check-in/{appointment_id}")
+async def reception_check_in(appointment_id: str, user=Depends(current_user)):
+    await require_reception(user)
+    appt = await db.appointments.find_one({"id": appointment_id}, {"_id": 0})
+    if not appt: raise HTTPException(404, "Appointment not found")
+    if appt["status"] != "booked":
+        raise HTTPException(400, "Only booked appointments can be checked in")
+    day = today()
+    active = await db.appointments.count_documents({"doctor_id": appt["doctor_id"], "day": day, "status": {"$in": ["waiting", "called"]}})
+    await db.appointments.update_one({"id": appointment_id}, {"$set": {"status": "waiting", "position": active + 1}})
+    await broadcast(appt["doctor_id"])
+    return {"ok": True}
+
+# ----- Patient 360 -----
+@api.get("/patients")
+async def list_patients(q: str = "", user=Depends(current_user)):
+    if user["role"] not in ("doctor", "reception", "admin"):
+        raise HTTPException(403, "Not allowed")
+    query = {"role": "patient"}
+    if q: query["$or"] = [{"name": {"$regex": q, "$options": "i"}}, {"phone": {"$regex": q, "$options": "i"}}, {"email": {"$regex": q, "$options": "i"}}]
+    users = await db.users.find(query, {"password_hash": 0}).limit(50).to_list(50)
+    return [{
+        "id": str(u["_id"]), "name": u["name"], "phone": u.get("phone", ""),
+        "email": u.get("email", ""), "age": u.get("age"), "gender": u.get("gender"),
+    } for u in users]
+
+@api.get("/patients/{patient_id}")
+async def patient_360(patient_id: str, user=Depends(current_user)):
+    if user["role"] not in ("doctor", "reception", "admin") and str(user["_id"]) != patient_id:
+        raise HTTPException(403, "Not allowed")
+    p = await db.users.find_one({"_id": ObjectId(patient_id)}, {"password_hash": 0})
+    if not p: raise HTTPException(404, "Patient not found")
+    visits = await db.visits.find({"patient_id": patient_id}, {"_id": 0}).sort("date", -1).limit(30).to_list(30)
+    last_vitals = next((v.get("vitals") for v in visits if v.get("vitals")), p.get("vitals"))
+    return {
+        "id": patient_id,
+        "name": p["name"], "phone": p.get("phone", ""),
+        "email": p.get("email"), "age": p.get("age"), "gender": p.get("gender"),
+        "blood_type": p.get("blood_type"), "allergies": p.get("allergies", []),
+        "conditions": p.get("conditions", []),
+        "vitals": last_vitals or {},
+        "visits": visits,
+    }
+
+@api.post("/patients/{patient_id}/summary")
+async def patient_summary(patient_id: str, user=Depends(current_user)):
+    if user["role"] not in ("doctor", "reception", "admin"):
+        raise HTTPException(403, "Not allowed")
+    p = await db.users.find_one({"_id": ObjectId(patient_id)})
+    if not p: raise HTTPException(404, "Patient not found")
+    visits = await db.visits.find({"patient_id": patient_id}, {"_id": 0}).sort("date", -1).limit(10).to_list(10)
+    context = f"Patient: {p['name']}. Age: {p.get('age', 'n/a')}. Gender: {p.get('gender', 'n/a')}. "
+    context += f"Allergies: {', '.join(p.get('allergies', [])) or 'none'}. "
+    context += f"Conditions: {', '.join(p.get('conditions', [])) or 'none'}.\n\n"
+    context += "Visits:\n"
+    for v in visits[:5]:
+        context += f"- {v.get('date','')[:10]} · {v.get('doctor_name','')} · {v.get('condition','')} · {v.get('notes','')}\n"
+    try:
+        chat = LlmChat(
+            api_key=os.environ["EMERGENT_LLM_KEY"],
+            session_id=f"p360-{patient_id}",
+            system_message="You are Dai, a clinical overview assistant. Summarize the patient's history into a brief, structured, non-diagnostic overview for a clinician: Overview, Chronic conditions, Allergies, Recent trend, Suggested follow-up (logistics only). Do not provide diagnosis or prescriptions.",
+        ).with_model("gemini", "gemini-3-flash-preview")
+        text = ""
+        async for event in chat.stream_message(UserMessage(text=context)):
+            if isinstance(event, TextDelta): text += event.content
+            if isinstance(event, StreamDone): break
+        return {"summary": text}
+    except Exception as e:
+        logger.warning("Dai summary unavailable: %s", e)
+        return {"summary": "Dai summary is temporarily unavailable."}
+
+@api.post("/visits")
+async def create_visit(appointment_id: str, data: Visit, user=Depends(current_user)):
+    if user["role"] != "doctor": raise HTTPException(403, "Doctor only")
+    appt = await db.appointments.find_one({"id": appointment_id, "doctor_id": str(user["_id"])}, {"_id": 0})
+    if not appt: raise HTTPException(404, "Appointment not found")
+    v = {
+        "id": str(uuid.uuid4()),
+        "appointment_id": appointment_id,
+        "patient_id": appt["patient_id"],
+        "patient_name": appt["patient_name"],
+        "doctor_id": str(user["_id"]),
+        "doctor_name": user["name"],
+        "condition": data.condition,
+        "medications": data.medications or [],
+        "notes": data.notes or "",
+        "date": now().isoformat(),
+    }
+    await db.visits.insert_one(v)
+    return {"ok": True, "id": v["id"]}
 
 # ----- Reviews -----
 @api.post("/doctors/{doctor_id}/review")
@@ -566,12 +750,59 @@ async def startup():
             "bio": "Cardiologist with 12 years of experience treating hypertension, arrhythmia, and preventive cardiac care.",
             "kyc_verified": True, "delay_minutes": 0,
         })
-    if not await db.users.find_one({"email": "patient@drd.demo"}):
+    for extra in [
+        ("Dr. Meera Shah", "doctor3@drd.demo", "Dermatology", 10, "Dermatologist with a focus on eczema, acne, and skin wellness."),
+        ("Dr. Kunal Verma", "doctor4@drd.demo", "Pediatrics", 15, "Pediatrician — gentle, child-first consultations for little humans."),
+    ]:
+        if not await db.users.find_one({"email": extra[1]}):
+            await db.users.insert_one({
+                "name": extra[0], "email": extra[1],
+                "password_hash": hash_password("Doctor123!"),
+                "role": "doctor", "approved": True,
+                "specialty": extra[2], "is_open": True,
+                "consult_minutes": extra[3], "daily_cap": 20,
+                "bio": extra[4], "kyc_verified": True, "delay_minutes": 0,
+            })
+    if not await db.users.find_one({"email": "reception@drd.demo"}):
         await db.users.insert_one({
-            "name": "Jordan Lee", "email": "patient@drd.demo",
+            "name": "Priya at Reception", "email": "reception@drd.demo",
+            "password_hash": hash_password("Reception123!"),
+            "role": "reception", "approved": True,
+        })
+    if not await db.users.find_one({"email": "patient@drd.demo"}):
+        patient_doc = {
+            "name": "Emily Parker", "email": "patient@drd.demo",
             "password_hash": hash_password("Patient123!"),
             "role": "patient", "approved": True,
-        })
+            "phone": "+91 91111 11111", "age": 32, "gender": "Female",
+            "blood_type": "O+", "allergies": ["Penicillin"],
+            "conditions": ["Hypertension", "Non-smoker"],
+            "vitals": {"bp": "128/84", "weight": "74 kg", "temp": "98.4 °F", "pulse": "78 bpm"},
+        }
+        await db.users.insert_one(patient_doc)
+        # Seed sample visit history
+        p = await db.users.find_one({"email": "patient@drd.demo"})
+        d2 = await db.users.find_one({"email": "doctor2@drd.demo"})
+        d3 = await db.users.find_one({"email": "doctor3@drd.demo"})
+        if p and d2 and d3:
+            samples = [
+                {"doctor": d2, "condition": "Hypertension follow-up", "meds": ["Amlodipine 5mg · 30 days"], "notes": "BP improved. Continue same dose.", "date": "2026-09-12T10:00:00+00:00"},
+                {"doctor": d3, "condition": "Contact dermatitis", "meds": ["Hydrocortisone cream"], "notes": "Avoid detergent contact.", "date": "2026-08-02T11:30:00+00:00"},
+                {"doctor": d2, "condition": "Viral fever", "meds": ["Paracetamol 500mg · 3 days"], "notes": "Advised rest and fluids.", "date": "2026-06-15T09:15:00+00:00"},
+            ]
+            for s in samples:
+                await db.visits.insert_one({
+                    "id": str(uuid.uuid4()),
+                    "patient_id": str(p["_id"]),
+                    "patient_name": p["name"],
+                    "doctor_id": str(s["doctor"]["_id"]),
+                    "doctor_name": s["doctor"]["name"],
+                    "condition": s["condition"],
+                    "medications": s["meds"],
+                    "notes": s["notes"],
+                    "vitals": {"bp": "128/84", "weight": "74 kg", "temp": "98.4 °F", "pulse": "78 bpm"},
+                    "date": s["date"],
+                })
 
 @app.on_event("shutdown")
 async def shutdown(): client.close()
